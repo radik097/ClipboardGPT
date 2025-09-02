@@ -1,35 +1,15 @@
 #!/usr/bin/env python3
-"""
-BeepConf Qt Chat — single clean implementation
+"""BeepConf Qt Chat — cleaned implementation with cross-platform notify helper.
 
-UI and behaviors implemented per user's schema. Uses OpenAI client v1 chat.completions.create.
+This file provides a small PyQt5 GUI and uses the OpenAI v1 client via
+`client.chat.completions.create`. It includes a safe, soft-import `notify`
+helper so non-Windows runners won't fail when `pywin32` is not present.
 """
+
 import json
 import os
 import sys
 import threading
-import traceback
-from pathlib import Path
-from typing import List, Optional
-
-import pyperclip
-from openai import OpenAI
-from PyQt5 import QtCore, QtGui, QtWidgets
-
-try:
-    import tiktoken
-except Exception:
-    tiktoken = None
-
-
-APP_NAME = "BeepConf Qt Chat"
-CONFIG_DIR = Path.home() / ".beepconf_qt_chat"
-CONFIG_FILE = CONFIG_DIR / "config.json"
-
-#!/usr/bin/env python3
-import json
-import os
-import sys
 import traceback
 from pathlib import Path
 from typing import List, Optional
@@ -74,10 +54,57 @@ def save_json(path: Path, data):
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 
+def notify(title: str, msg: str, duration: int = 5):
+    """Cross-platform soft notification.
+
+    Attempts Windows toast via win10toast on Windows, notify2 on POSIX. Falls back
+    to printing to stdout. Does not raise on import errors.
+    """
+    try:
+        if os.name == "nt":
+            try:
+                from win10toast import ToastNotifier
+
+                ToastNotifier().show_toast(title, msg, duration=duration, threaded=True)
+                return
+            except Exception:
+                pass
+
+        # Non-Windows: try notify2 (libnotify)
+        try:
+            import notify2
+
+            notify2.init(APP_NAME)
+            n = notify2.Notification(title, msg)
+            n.set_timeout(duration * 1000)
+            n.show()
+            return
+        except Exception:
+            pass
+    except Exception:
+        # Never crash because of notifications
+        pass
+
+    try:
+        print(f"[notify] {title}: {msg}")
+    except Exception:
+        # last-resort silent fail
+        return
+
+
 class ApiWorker(QtCore.QThread):
     finished = QtCore.pyqtSignal(object, object)
 
-    def __init__(self, api_key: Optional[str], base_url: Optional[str], messages: List[dict], model: str, temperature: float, n: int, timeout: int = 60):
+    def __init__(
+        self,
+        api_key: Optional[str],
+        base_url: Optional[str],
+        messages: List[dict],
+        model: str,
+        temperature: float,
+        n: int,
+        timeout: int = 60,
+    ):
         super().__init__()
         self.api_key = api_key
         self.base_url = base_url
@@ -102,11 +129,30 @@ class ApiWorker(QtCore.QThread):
                 temperature=self.temperature,
                 n=self.n,
                 max_tokens=1024,
+                # some openai client versions don't accept request_timeout kwarg
+                # try with it first, fallback to call without if not supported
                 request_timeout=self.timeout,
             )
             self.finished.emit(resp, None)
         except Exception as e:
             tb = traceback.format_exc()
+            # If the error was due to unsupported request_timeout, retry without it
+            if isinstance(e, TypeError) and 'request_timeout' in str(e):
+                try:
+                    resp = client.chat.completions.create(
+                        model=self.model,
+                        messages=self.messages,
+                        temperature=self.temperature,
+                        n=self.n,
+                        max_tokens=1024,
+                    )
+                    self.finished.emit(resp, None)
+                    return
+                except Exception as e2:
+                    tb = traceback.format_exc()
+                    self.finished.emit(None, (e2, tb))
+                    return
+
             self.finished.emit(None, (e, tb))
 
 
@@ -225,6 +271,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.send_btn.setEnabled(False)
         self._log("Sending...")
+        notify(APP_NAME, "Sending request...")
         self.worker = ApiWorker(api_key, base, messages, model, temperature, n)
         self.worker.finished.connect(self._on_finished)
         self.worker.start()
@@ -234,6 +281,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if err:
             e, tb = err
             self._log(f"API error: {e}\n{tb}")
+            notify(APP_NAME + " — Error", str(e))
             return
 
         try:
@@ -257,8 +305,10 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.preview.setPlainText(candidates_texts[0])
             self._append_history(self.input_edit.toPlainText(), candidates_texts)
             self._log(f"Received {len(candidates_texts)} candidate(s)")
+            notify(APP_NAME, f"Received {len(candidates_texts)} candidate(s)")
         except Exception as e:
             self._log(f"Failed to parse API response: {e}")
+            notify(APP_NAME + " — Error", f"Failed to parse API response: {e}")
 
     def _on_candidate(self, item: QtWidgets.QListWidgetItem):
         txt = item.data(QtCore.Qt.UserRole) or item.text()
@@ -305,4 +355,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-                # Left nav
