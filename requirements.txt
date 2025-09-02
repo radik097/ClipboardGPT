@@ -17,7 +17,7 @@ tqdm==4.67.1
 typing-inspection==0.4.1
 typing_extensions==4.15.0
 pynput==1.8.0
-PyQt5==5.15.9
+flet==0.28.3
 tiktoken
 # уведомления:
 win10toast==0.9; platform_system == "Windows"
