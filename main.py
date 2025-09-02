@@ -235,7 +235,7 @@ def message_row(
         alignment = ft.MainAxisAlignment.END
     else:
         copy_btn = ft.TextButton(
-            content=ft.Row([ft.Icon(ft.icons.CONTENT_COPY, size=14), ft.Text("Copy", size=12)], spacing=4),
+            content=ft.Row([ft.Icon(ft.Icons.CONTENT_COPY, size=14), ft.Text("Copy", size=12)], spacing=4),
             style=ft.ButtonStyle(
                 padding=ft.padding.symmetric(4, 8),
                 shape=ft.RoundedRectangleBorder(radius=8),
@@ -315,7 +315,7 @@ def flet_main(page: ft.Page):
 
     input_tf = ft.TextField(hint_text="Type your message... (Ctrl+Enter to send)", multiline=True, min_lines=3, max_lines=6, expand=True, border_radius=10, border_color=pal.border, on_change=lambda e: toggle_send_button())
     send_btn = ft.ElevatedButton("Send", icon="send", disabled=True)
-    copy_last_btn = ft.TextButton("Copy", icon="content_copy")
+    copy_last_btn = ft.TextButton("Copy", icon=ft.Icons.CONTENT_COPY)
 
     theme_btn = ft.IconButton(icon=("dark_mode" if page.theme_mode == ft.ThemeMode.LIGHT else "light_mode"), tooltip="Toggle theme")
     clear_btn = ft.TextButton("Clear history", icon="clear_all")
@@ -392,7 +392,14 @@ def flet_main(page: ft.Page):
         # Pass coroutine function and its args to run_task (do not call it here)
         page.run_task(process_send, txt, preset, on_complete=on_task_done)
 
-        send_btn.on_click = do_send
+    # Bind send button click handler once
+    send_btn.on_click = do_send
+
+    # Copy last response button
+    def copy_last(_=None):
+        if state["last_resp_text"]:
+            page.set_clipboard(state["last_resp_text"])
+    copy_last_btn.on_click = copy_last
 
     def clear_history(_):
         page.client_storage.remove(HIST_KEY)
