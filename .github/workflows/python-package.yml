@@ -1,0 +1,116 @@
+name: Build Win/macOS/Linux
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-22.04]
+        python-version: ["3.11"]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # Linux зависимости для PyQt5 (на этапе сборки иногда нужны)
+      - name: Install Linux system deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgl1 libxkbcommon-x11-0 libxcb-xinerama0 libdbus-1-3
+          # при проблемах с Qt xcb-плагином можно добавить:
+          # sudo apt-get install -y libxcb1 libxcb-render0 libxcb-shm0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-util1 libxcb-xfixes0 libxrender1
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip wheel
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          pip install pyinstaller
+        shell: bash
+
+      # ---------------- Windows build (.exe) ----------------
+      - name: Build Windows executables
+        if: runner.os == 'Windows'
+        run: |
+          pyinstaller --noconfirm --onefile --windowed --name "BeepConfChat" beepconf_qt_chat.py
+          pyinstaller --noconfirm --onefile                    --name "ghub_chatgpt_clip" ghub_chatgpt_clip.py
+          pyinstaller --noconfirm --onefile                    --name "beepconf_setup"     main.py
+        shell: cmd
+
+      - name: Zip Windows dist
+        if: runner.os == 'Windows'
+        run: |
+          powershell -Command "Compress-Archive -Path 'dist\\*' -DestinationPath 'dist\\BeepConf_Windows.zip'"
+        shell: pwsh
+
+      - name: Upload Windows artifact
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: BeepConf_Windows
+          path: dist/BeepConf_Windows.zip
+          if-no-files-found: error
+
+      # ---------------- macOS build (.app) ----------------
+      - name: Build macOS app
+        if: runner.os == 'macOS'
+        run: |
+          pyinstaller --noconfirm --windowed --name "BeepConf Chat" beepconf_qt_chat.py
+          # CLI-шки можно собрать тоже, но они не нужны как .app:
+          pyinstaller --noconfirm --onefile --name "ghub_chatgpt_clip" ghub_chatgpt_clip.py
+          pyinstaller --noconfirm --onefile --name "beepconf_setup"     main.py
+          # Упаковка .app в zip (правильно через ditto)
+          cd dist
+          ditto -c -k --sequesterRsrc --keepParent "BeepConf Chat.app" BeepConf_Chat_macOS.zip
+        shell: bash
+
+      - name: Upload macOS artifact
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v4
+        with:
+          name: BeepConf_macOS
+          path: |
+            dist/BeepConf_Chat_macOS.zip
+            dist/ghub_chatgpt_clip
+            dist/beepconf_setup
+          if-no-files-found: error
+
+      # ---------------- Ubuntu 22.04 build (ELF) ----------------
+      - name: Build Linux binaries
+        if: runner.os == 'Linux'
+        run: |
+          pyinstaller --noconfirm --onefile --windowed --name "beepconf-qt"      beepconf_qt_chat.py
+          pyinstaller --noconfirm --onefile           --name "ghub_chatgpt_clip" ghub_chatgpt_clip.py
+          pyinstaller --noconfirm --onefile           --name "beepconf_setup"     main.py
+          tar -czf dist/BeepConf_Linux_Ubuntu2204.tar.gz -C dist beepconf-qt ghub_chatgpt_clip beepconf_setup
+        shell: bash
+
+      - name: Upload Linux artifact
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: BeepConf_Linux_Ubuntu2204
+          path: dist/BeepConf_Linux_Ubuntu2204.tar.gz
+          if-no-files-found: error
