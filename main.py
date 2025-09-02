@@ -11,6 +11,11 @@ import sys
 import os
 import traceback
 from openai import OpenAI
+try:
+    # For specific quota/rate-limit handling
+    from openai import RateLimitError  # type: ignore
+except Exception:
+    RateLimitError = Exception  # fallback
 
 try:
     import flet as ft
@@ -94,10 +99,13 @@ async def send_to_backend(prompt: str, attached_preset: str | None) -> str:
                     parts.append(txt)
 
             return "\n\n".join(parts) if parts else ""
+        except RateLimitError as re:
+            # Normalize rate-limit / insufficient quota to a simple code the UI can detect
+            return f"ERROR:429_INSUFFICIENT_QUOTA|{re}"
         except Exception as e:
             tb = traceback.format_exc()
             # return an informative error to the caller
-            return f"ERROR: {e}\n{tb}"
+            return f"ERROR:GENERIC|{e}\n{tb}"
 
     # run blocking call in default executor
     result = await loop.run_in_executor(None, blocking_call)
@@ -370,9 +378,24 @@ def flet_main(page: ft.Page):
             resp = t.result()
         except Exception as ex:
             resp = f"ERROR: {ex}"
-        append_message(resp, "resp")
-        state["last_resp_text"] = resp
-        save_hist_pair(state["last_req_text"], resp)
+        # Handle error patterns from backend
+        if isinstance(resp, str) and resp.startswith("ERROR:"):
+            # Parse normalized codes
+            title = "Request failed"
+            if resp.startswith("ERROR:429_INSUFFICIENT_QUOTA"):
+                title = "Insufficient quota (429)"
+            # Show SnackBar
+            page.snack_bar = ft.SnackBar(
+                content=ft.Text(title, color=ft.Colors.WHITE),
+                bgcolor=ft.Colors.RED_600,
+                show_close_icon=True,
+            )
+            page.snack_bar.open = True
+            page.update()
+        else:
+            append_message(resp, "resp")
+            state["last_resp_text"] = resp
+            save_hist_pair(state["last_req_text"], resp)
         page.update()
 
     def do_send(_=None):
@@ -389,8 +412,9 @@ def flet_main(page: ft.Page):
         page.update()
 
         preset = attached_preset["text"]
-        # Pass coroutine function and its args to run_task (do not call it here)
-        page.run_task(process_send, txt, preset, on_complete=on_task_done)
+        # Запускаем задачу и подписываемся на завершение через add_done_callback
+        fut = page.run_task(process_send, txt, preset)
+        fut.add_done_callback(on_task_done)
 
     # Bind send button click handler once
     send_btn.on_click = do_send
